@@ -897,9 +897,9 @@ uploaded_tiers = st.file_uploader("3) Fichier TIERS PAYANT (.xlsx) — optionnel
 with st.sidebar:
     st.header("Paramètres")
 
-    st.subheader("Compte 53 (caisse à ventiler)")
-    compte_53 = st.text_input("Compte 53", value="53000000")
-    lib_53 = st.text_input("Libellé 53", value="Caisse à ventiler")
+    st.subheader("Compte 53 (clients à ventiler)")
+    compte_53 = st.text_input("Compte 411", value="CCLIENTS")
+    lib_53 = st.text_input("Libellé 411", value="Clients à ventiler")
 
     st.subheader("Journal VENTES (CA)")
     jv_code = st.text_input("JournalCode ventes", value="VT")
@@ -935,9 +935,9 @@ with st.sidebar:
     mode_default_text = """Mode;CompteNum;CompteLib
 carte bancaire;5830000;CB à encaisser
 chèque;53200000;Chèques à encaisser
-espèces;53000000;Caisse
+espèces;53100000;Caisse
 virement;5850000;Banque
-tiers-payant;58400000;Tiers payant à recevoir
+tiers-payant;46700000;Tiers payant à recevoir
 """
     mode_text = st.text_area("Grille modes", value=mode_default_text, height=170)
 
@@ -945,8 +945,8 @@ tiers-payant;58400000;Tiers payant à recevoir
     jr_code = st.text_input("JournalCode remises", value="BQ")
     jr_lib = st.text_input("JournalLib remises", value="Remises en banque")
 
-    compte_512 = st.text_input("Compte 512 (Banque) - Débit", value="512000")
-    lib_512 = st.text_input("Lib 512", value="Banque")
+    compte_512 = st.text_input("Compte 512 (Banque) - Débit", value="532000")
+    lib_512 = st.text_input("Lib 532", value="Banque")
 
     compte_5112 = st.text_input("Compte 5112 (Chèques) - Crédit", value="511200")
     lib_5112 = st.text_input("Lib 5112", value="Chèques à encaisser")
