@@ -937,7 +937,7 @@ carte bancaire;5830000;CB à encaisser
 chèque;53200000;Chèques à encaisser
 espèces;53100000;Caisse
 virement;5850000;Banque
-tiers-payant;46700000;Tiers payant à recevoir
+tiers-payant;CMUTUELLE;Tiers payant à recevoir
 """
     mode_text = st.text_area("Grille modes", value=mode_default_text, height=170)
 
@@ -958,7 +958,7 @@ tiers-payant;46700000;Tiers payant à recevoir
     jtp_code = st.text_input("JournalCode TP", value="TP")
     jtp_lib = st.text_input("JournalLib TP", value="Tiers payant")
 
-    compte_467 = st.text_input("Compte 467 (Crédit)", value="467000")
+    compte_467 = st.text_input("Compte 467 (Crédit)", value="CMUTUELLE")
     lib_467 = st.text_input("Libellé 467", value="Tiers payant à recevoir")
 
     compte_584 = st.text_input("Compte 584 (Débit)", value="584000")
