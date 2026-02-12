@@ -162,6 +162,22 @@ def check_balance(fec: pd.DataFrame) -> pd.DataFrame:
     chk["Delta"] = (chk["Debit"] - chk["Credit"]).round(2)
     return chk
 
+FAC_PREFIX_RE = re.compile(r"^\s*fac[-\s]*", re.IGNORECASE)
+
+def clean_piece_ref(inv: str) -> str:
+    """
+    - "FAC-1000180" -> "1000180"
+    - "fac 1000180" -> "1000180"
+    - "1000180" -> "1000180"
+    - sinon: renvoie la string nettoyée
+    """
+    if inv is None:
+        return ""
+    s = str(inv).strip()
+    s = FAC_PREFIX_RE.sub("", s)          # enlève "FAC-" / "fac " au début
+    s = re.sub(r"\s+", "", s)             # enlève espaces
+    return s
+
 
 # ============================
 # Excel helpers
@@ -431,8 +447,7 @@ def extract_tiers_payant_encaisse(raw: pd.DataFrame) -> pd.DataFrame:
 
     rows = []
     for r in range(header_row + 1, len(raw)):
-        inv = raw.iat[r, c_inv]
-        inv = "" if inv is None else str(inv).strip()
+        inv = clean_piece_ref(raw.iat[r, c_inv])
         if not inv or inv.lower() == "nan":
             continue
 
@@ -723,7 +738,7 @@ def build_fec_settlements(enc_df: pd.DataFrame,
 
     fec_rows = []
     for _, row in df.iterrows():
-        inv = str(row["invoice_number"])
+        inv = clean_piece_ref(row["invoice_number"])
         dt = row["invoice_date"]
         mode = row["mode"]
         amt = round(float(row["amount"]), 2)
@@ -839,7 +854,7 @@ def build_fec_tiers_payant(tp_df: pd.DataFrame,
 
     fec_rows = []
     for _, r in tp_df.iterrows():
-        inv = str(r["invoice"]).strip()
+        inv = clean_piece_ref(r["invoice"])
         dt = r["date_encaissement"]
         amt = round(float(r["amount"]), 2)
 
