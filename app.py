@@ -957,7 +957,7 @@ tiers-payant;CMUTUELLE;Tiers payant à recevoir
     mode_text = st.text_area("Grille modes", value=mode_default_text, height=170)
 
     st.subheader("Paramètres REMISES en banque (si fichier REMISES fourni)")
-    jr_code = st.text_input("JournalCode remises", value="BQ")
+    jr_code = st.text_input("JournalCode remises", value="CS")
     jr_lib = st.text_input("JournalLib remises", value="Remises en banque")
 
     compte_512 = st.text_input("Compte 512 (Banque) - Débit", value="532000")
@@ -970,7 +970,7 @@ tiers-payant;CMUTUELLE;Tiers payant à recevoir
     lib_531 = st.text_input("Lib 531", value="Caisse espèces")
 
     st.subheader("TIERS PAYANT encaissé (467 → 584) si fichier TIERS fourni")
-    jtp_code = st.text_input("JournalCode TP", value="TP")
+    jtp_code = st.text_input("JournalCode TP", value="CS")
     jtp_lib = st.text_input("JournalLib TP", value="Tiers payant")
 
     compte_467 = st.text_input("Compte 467 (Crédit)", value="CMUTUELLE")
