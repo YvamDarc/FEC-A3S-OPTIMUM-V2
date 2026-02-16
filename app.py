@@ -33,8 +33,11 @@ BORDEREAU_RE = re.compile(
 )
 
 # TIERS PAYANT exports
-# On vise le bloc "Tiers-payant encaissés" : header contient ces champs
 TP_HEADER = ["Date pointage", "Date encaissement", "Mode de règlement", "Montant", "N° facture"]
+
+# ACOMPTES exports
+ACOMPTE_HDR_VERSES = ["Date", "N° acompte", "Client", "Montant"]
+ACOMPTE_HDR_REGUL = ["Date", "N° acompte", "N° facture", "Client", "Montant"]
 
 MODE_NORMALIZE = {
     "carte bancaire": "carte bancaire",
@@ -162,6 +165,7 @@ def check_balance(fec: pd.DataFrame) -> pd.DataFrame:
     chk["Delta"] = (chk["Debit"] - chk["Credit"]).round(2)
     return chk
 
+
 FAC_PREFIX_RE = re.compile(r"^\s*fac[-\s]*", re.IGNORECASE)
 
 def clean_piece_ref(inv: str) -> str:
@@ -169,13 +173,12 @@ def clean_piece_ref(inv: str) -> str:
     - "FAC-1000180" -> "1000180"
     - "fac 1000180" -> "1000180"
     - "1000180" -> "1000180"
-    - sinon: renvoie la string nettoyée
     """
     if inv is None:
         return ""
     s = str(inv).strip()
-    s = FAC_PREFIX_RE.sub("", s)          # enlève "FAC-" / "fac " au début
-    s = re.sub(r"\s+", "", s)             # enlève espaces
+    s = FAC_PREFIX_RE.sub("", s)
+    s = re.sub(r"\s+", "", s)
     return s
 
 
@@ -225,6 +228,17 @@ def find_header_row(raw: pd.DataFrame, start_row: int, end_row: int, required_la
     return None, {}
 
 
+def find_section_row(raw: pd.DataFrame, needle: str) -> int | None:
+    """Trouve la ligne où apparaît un libellé de section (ex: 'Acomptes versés')."""
+    n = _norm_cell(needle)
+    for i in range(len(raw)):
+        row = raw.iloc[i].astype(str).tolist()
+        joined = " ".join([_norm_cell(x) for x in row if x and str(x).lower() != "nan"])
+        if n in joined:
+            return i
+    return None
+
+
 # ============================
 # CAISSE sheet parsing
 # ============================
@@ -240,11 +254,6 @@ def find_facture_rows(raw: pd.DataFrame) -> list[tuple[int, str, str]]:
 
 
 def extract_sales_lines_and_totals(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    - sales_lines: lignes détaillées (produit non vide)
-    - invoice_totals: ligne de synthèse par facture (si présentes)
-      colonnes: invoice_number, invoice_date, total_ttc, total_vat
-    """
     factures = find_facture_rows(raw)
     sales_rows = []
     totals_rows = []
@@ -282,12 +291,11 @@ def extract_sales_lines_and_totals(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.
             montant_tva = parse_eur(raw.iat[r, c_mont_tva])
             total_op = parse_eur(raw.iat[r, c_total_op])
 
-            # Lignes détaillées
             if not prod_is_empty:
                 rate = parse_tva_rate(raw.iat[r, c_tva_rate])
                 if abs(montant_du) > 1e-9:
                     sales_rows.append({
-                        "invoice_number": str(inv),
+                        "invoice_number": clean_piece_ref(inv),
                         "invoice_date": inv_date,
                         "tva_rate": round(float(rate), 6),
                         "ttc_net": round(float(montant_du), 2),
@@ -295,10 +303,9 @@ def extract_sales_lines_and_totals(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.
                     })
                 continue
 
-            # Ligne synthèse / non détaillée
             if abs(montant_du) > 1e-9 and (abs(montant_tva) > 1e-9 or abs(total_op) > 1e-9):
                 last_total = {
-                    "invoice_number": str(inv),
+                    "invoice_number": clean_piece_ref(inv),
                     "invoice_date": inv_date,
                     "total_ttc": round(float(montant_du), 2),
                     "total_vat": round(float(montant_tva), 2),
@@ -339,7 +346,7 @@ def extract_encaissements(raw: pd.DataFrame) -> pd.DataFrame:
             md = normalize_mode(raw.iat[r, c_mode])
             if md and abs(amt) > 1e-9:
                 rows.append({
-                    "invoice_number": str(inv),
+                    "invoice_number": clean_piece_ref(inv),
                     "invoice_date": inv_date,
                     "amount": round(float(amt), 2),
                     "mode": md,
@@ -425,17 +432,9 @@ def extract_remises_especes(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================
-# TIERS PAYANT encaissé parsing (3e fichier)
+# TIERS PAYANT encaissé parsing
 # ============================
 def extract_tiers_payant_encaisse(raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Extrait uniquement le tableau "Tiers-payant encaissés".
-    Critères:
-    - header avec au moins TP_HEADER
-    - Montant > 0
-    - Date encaissement parsable
-    - N° facture non vide
-    """
     header_row, cols = find_header_row(raw, 0, len(raw), TP_HEADER)
     if header_row is None:
         return pd.DataFrame(columns=["invoice", "date_encaissement", "amount", "mode", "source_row"])
@@ -471,12 +470,118 @@ def extract_tiers_payant_encaisse(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================
+# ACOMPTES parsing (nouveau)
+# ============================
+def extract_acomptes_verses(raw: pd.DataFrame) -> pd.DataFrame:
+    r0 = find_section_row(raw, "Acomptes versés")
+    if r0 is None:
+        return pd.DataFrame(columns=["date", "num_acompte", "client", "amount", "source_row"])
+
+    candidates = [
+        find_section_row(raw, "Acomptes remboursés"),
+        find_section_row(raw, "Acomptes régularisés"),
+        find_section_row(raw, "Acomptes regularises"),
+        find_section_row(raw, "Acomptes non régularisés"),
+        find_section_row(raw, "Acomptes non regularises"),
+    ]
+    r1 = min([x for x in candidates if x is not None] + [len(raw)])
+
+    header_row, cols = find_header_row(raw, r0, r1, ACOMPTE_HDR_VERSES)
+    if header_row is None:
+        return pd.DataFrame(columns=["date", "num_acompte", "client", "amount", "source_row"])
+
+    c_date = cols[_norm_cell("Date")]
+    c_num = cols[_norm_cell("N° acompte")]
+    c_cli = cols[_norm_cell("Client")]
+    c_amt = cols[_norm_cell("Montant")]
+
+    rows = []
+    for r in range(header_row + 1, r1):
+        num = raw.iat[r, c_num]
+        num = "" if num is None else str(num).strip()
+        if not num or num.lower() == "nan":
+            continue
+        if "total" in _norm_cell(num):
+            break
+
+        dt = parse_date_any(raw.iat[r, c_date])
+        amt = parse_eur(raw.iat[r, c_amt])
+        if dt is None or abs(amt) < 0.01:
+            continue
+
+        client = raw.iat[r, c_cli]
+        client = "" if client is None else str(client).strip()
+
+        rows.append({
+            "date": dt,
+            "num_acompte": str(num).strip(),
+            "client": client,
+            "amount": round(float(amt), 2),
+            "source_row": r
+        })
+
+    return pd.DataFrame(rows, columns=["date", "num_acompte", "client", "amount", "source_row"])
+
+
+def extract_acomptes_regularises(raw: pd.DataFrame) -> pd.DataFrame:
+    r0 = find_section_row(raw, "Acomptes régularisés")
+    if r0 is None:
+        r0 = find_section_row(raw, "Acomptes regularises")
+    if r0 is None:
+        return pd.DataFrame(columns=["date", "num_acompte", "num_facture", "client", "amount", "source_row"])
+
+    candidates = [
+        find_section_row(raw, "Acomptes non régularisés"),
+        find_section_row(raw, "Acomptes non regularises"),
+    ]
+    r1 = min([x for x in candidates if x is not None] + [len(raw)])
+
+    header_row, cols = find_header_row(raw, r0, r1, ACOMPTE_HDR_REGUL)
+    if header_row is None:
+        return pd.DataFrame(columns=["date", "num_acompte", "num_facture", "client", "amount", "source_row"])
+
+    c_date = cols[_norm_cell("Date")]
+    c_num = cols[_norm_cell("N° acompte")]
+    c_fac = cols[_norm_cell("N° facture")]
+    c_cli = cols[_norm_cell("Client")]
+    c_amt = cols[_norm_cell("Montant")]
+
+    rows = []
+    for r in range(header_row + 1, r1):
+        num = raw.iat[r, c_num]
+        num = "" if num is None else str(num).strip()
+        if not num or num.lower() == "nan":
+            continue
+        if "total" in _norm_cell(num):
+            break
+
+        dt = parse_date_any(raw.iat[r, c_date])
+        amt = parse_eur(raw.iat[r, c_amt])
+        if dt is None or abs(amt) < 0.01:
+            continue
+
+        fac = raw.iat[r, c_fac]
+        fac = "" if fac is None else str(fac).strip()
+
+        client = raw.iat[r, c_cli]
+        client = "" if client is None else str(client).strip()
+
+        rows.append({
+            "date": dt,
+            "num_acompte": str(num).strip(),
+            "num_facture": clean_piece_ref(fac) if fac else "",
+            "client": client,
+            "amount": round(float(amt), 2),
+            "source_row": r
+        })
+
+    return pd.DataFrame(rows, columns=["date", "num_acompte", "num_facture", "client", "amount", "source_row"])
+
+
+# ============================
 # Build mappings from CSV text
 # ============================
 def build_vat_map_from_csv(text: str) -> dict:
-    """
-    Format CSV (;) : TauxTVA;Compte70;Lib70;CompteTVA;LibTVA
-    """
     text = (text or "").strip()
     if not text:
         return {}
@@ -498,9 +603,6 @@ def build_vat_map_from_csv(text: str) -> dict:
 
 
 def build_mode_map_from_csv(text: str) -> tuple[dict, dict]:
-    """
-    Format CSV (;) : Mode;CompteNum;CompteLib
-    """
     text = (text or "").strip()
     if not text:
         return {}, {}
@@ -843,12 +945,6 @@ def build_fec_tiers_payant(tp_df: pd.DataFrame,
                            lib_467: str,
                            compte_584: str,
                            lib_584: str) -> pd.DataFrame:
-    """
-    Lignes "TP encaissés" :
-      Débit 584 / Crédit 467
-    PieceRef = N° facture (ex: FAC-1000178)
-    EcritureDate = date encaissement
-    """
     if tp_df is None or tp_df.empty:
         return pd.DataFrame(columns=FEC_COLUMNS)
 
@@ -893,21 +989,121 @@ def build_fec_tiers_payant(tp_df: pd.DataFrame,
     return fec
 
 
+def build_fec_acomptes(
+    verses: pd.DataFrame,
+    regul: pd.DataFrame,
+    journal_code: str,
+    journal_lib: str,
+    compte_encaissement: str,
+    lib_encaissement: str,
+    compte_4191: str,
+    lib_4191: str,
+    compte_clients: str,
+    lib_clients: str,
+) -> pd.DataFrame:
+    rows = []
+
+    # Acomptes versés : Débit encaissement / Crédit 4191
+    if verses is not None and not verses.empty:
+        for _, r in verses.iterrows():
+            dt = r["date"]
+            num = str(r["num_acompte"]).strip()
+            client = str(r.get("client", "")).strip()
+            amt = round(float(r["amount"]), 2)
+
+            ecriture_num = f"ACV-{num}"
+            piece_ref = num
+            lib = f"Acompte versé {num} {client}".strip()
+
+            rows.append({
+                "JournalCode": journal_code, "JournalLib": journal_lib,
+                "EcritureNum": ecriture_num, "EcritureDate": dt.strftime("%Y%m%d"),
+                "CompteNum": compte_encaissement, "CompteLib": lib_encaissement,
+                "CompAuxNum": "", "CompAuxLib": "",
+                "PieceRef": piece_ref, "PieceDate": dt.strftime("%Y%m%d"),
+                "EcritureLib": lib,
+                "Debit": amt, "Credit": 0.0,
+                "EcritureLet": "", "DateLet": "",
+                "ValidDate": dt.strftime("%Y%m%d"),
+                "Montantdevise": "", "Idevise": ""
+            })
+
+            rows.append({
+                "JournalCode": journal_code, "JournalLib": journal_lib,
+                "EcritureNum": ecriture_num, "EcritureDate": dt.strftime("%Y%m%d"),
+                "CompteNum": compte_4191, "CompteLib": lib_4191,
+                "CompAuxNum": "", "CompAuxLib": "",
+                "PieceRef": piece_ref, "PieceDate": dt.strftime("%Y%m%d"),
+                "EcritureLib": lib,
+                "Debit": 0.0, "Credit": amt,
+                "EcritureLet": "", "DateLet": "",
+                "ValidDate": dt.strftime("%Y%m%d"),
+                "Montantdevise": "", "Idevise": ""
+            })
+
+    # Acomptes régularisés : Débit 4191 / Crédit clients
+    if regul is not None and not regul.empty:
+        for _, r in regul.iterrows():
+            dt = r["date"]
+            num = str(r["num_acompte"]).strip()
+            fac = str(r.get("num_facture", "")).strip()
+            client = str(r.get("client", "")).strip()
+            amt = round(float(r["amount"]), 2)
+
+            ecriture_num = f"ACR-{num}-{fac}".strip("-")
+            piece_ref = fac if fac else num
+            lib = f"Régularisation acompte {num} sur facture {fac} {client}".strip()
+
+            rows.append({
+                "JournalCode": journal_code, "JournalLib": journal_lib,
+                "EcritureNum": ecriture_num, "EcritureDate": dt.strftime("%Y%m%d"),
+                "CompteNum": compte_4191, "CompteLib": lib_4191,
+                "CompAuxNum": "", "CompAuxLib": "",
+                "PieceRef": piece_ref, "PieceDate": dt.strftime("%Y%m%d"),
+                "EcritureLib": lib,
+                "Debit": amt, "Credit": 0.0,
+                "EcritureLet": "", "DateLet": "",
+                "ValidDate": dt.strftime("%Y%m%d"),
+                "Montantdevise": "", "Idevise": ""
+            })
+
+            rows.append({
+                "JournalCode": journal_code, "JournalLib": journal_lib,
+                "EcritureNum": ecriture_num, "EcritureDate": dt.strftime("%Y%m%d"),
+                "CompteNum": compte_clients, "CompteLib": lib_clients,
+                "CompAuxNum": "", "CompAuxLib": "",
+                "PieceRef": piece_ref, "PieceDate": dt.strftime("%Y%m%d"),
+                "EcritureLib": lib,
+                "Debit": 0.0, "Credit": amt,
+                "EcritureLet": "", "DateLet": "",
+                "ValidDate": dt.strftime("%Y%m%d"),
+                "Montantdevise": "", "Idevise": ""
+            })
+
+    fec = pd.DataFrame(rows, columns=FEC_COLUMNS)
+    for col in ["Debit", "Credit"]:
+        if col in fec.columns:
+            fec[col] = pd.to_numeric(fec[col], errors="coerce").fillna(0.0).round(2)
+    return fec
+
+
 # ============================
-# Streamlit UI (3 fichiers -> 1 FEC)
+# Streamlit UI (4 fichiers -> 1 FEC)
 # ============================
-st.set_page_config(page_title="Optimum → FEC (3 fichiers)", layout="wide")
-st.title("Optimum/AS3 → FEC unique (CAISSE + REMISES + TIERS PAYANT encaissé)")
+st.set_page_config(page_title="Optimum → FEC (4 fichiers)", layout="wide")
+st.title("Optimum/AS3 → FEC unique (CAISSE + REMISES + TIERS PAYANT + ACOMPTES)")
 
 st.caption(
     "1) CAISSE (obligatoire) → ventes + encaissements + contrôle. "
     "2) REMISES (optionnel) → remises chèques + espèces (logique 'Remis le' inchangée). "
-    "3) TIERS PAYANT (optionnel) → TP encaissés (Débit 584 / Crédit 467)."
+    "3) TIERS PAYANT (optionnel) → TP encaissés (Débit 584 / Crédit 467). "
+    "4) ACOMPTES (optionnel) → acomptes versés (Débit 583 / Crédit 4191) + régularisation (Débit 4191 / Crédit Clients)."
 )
 
 uploaded_caisse = st.file_uploader("1) Fichier CAISSE (.xlsx)", type=["xlsx", "xls"], key="caisse")
 uploaded_remises = st.file_uploader("2) Fichier REMISES (.xlsx) — optionnel", type=["xlsx", "xls"], key="remises")
 uploaded_tiers = st.file_uploader("3) Fichier TIERS PAYANT (.xlsx) — optionnel", type=["xlsx", "xls"], key="tiers")
+uploaded_acomptes = st.file_uploader("4) Fichier ACOMPTES (.xlsx) — optionnel", type=["xlsx", "xls"], key="acomptes")
 
 with st.sidebar:
     st.header("Paramètres")
@@ -978,6 +1174,17 @@ tiers-payant;CMUTUELLE;Tiers payant à recevoir
 
     compte_584 = st.text_input("Compte 584 (Débit)", value="584000")
     lib_584 = st.text_input("Libellé 584", value="Tiers payant encaissé")
+
+    st.subheader("ACOMPTES (4191) si fichier ACOMPTES fourni")
+    jac_code = st.text_input("JournalCode acomptes", value="AC")
+    jac_lib = st.text_input("JournalLib acomptes", value="Acomptes")
+
+    # ✅ demandé : défaut 583 CB
+    acompte_compte_debit = st.text_input("Compte débit acomptes versés", value="5830000")
+    acompte_lib_debit = st.text_input("Libellé débit acomptes versés", value="CB à encaisser (acomptes)")
+
+    acompte_compte_4191 = st.text_input("Compte 4191", value="419100")
+    acompte_lib_4191 = st.text_input("Libellé 4191", value="Clients - Avances et acomptes reçus")
 
 if not uploaded_caisse:
     st.info("Charge au moins le fichier CAISSE.")
@@ -1092,7 +1299,7 @@ if uploaded_remises is not None:
     fec_parts.extend([fec_rem_cheques, fec_rem_especes])
 
 # ============================
-# Optional TIERS PAYANT (encaissé) -> 467 / 584
+# Optional TIERS PAYANT
 # ============================
 tp_enc = pd.DataFrame(columns=["invoice", "date_encaissement", "amount", "mode", "source_row"])
 fec_tp = pd.DataFrame(columns=FEC_COLUMNS)
@@ -1118,6 +1325,38 @@ if uploaded_tiers is not None:
     fec_parts.append(fec_tp)
 
 # ============================
+# Optional ACOMPTES (nouveau)
+# ============================
+acomptes_verses = pd.DataFrame(columns=["date", "num_acompte", "client", "amount", "source_row"])
+acomptes_regul = pd.DataFrame(columns=["date", "num_acompte", "num_facture", "client", "amount", "source_row"])
+fec_acomptes = pd.DataFrame(columns=FEC_COLUMNS)
+
+if uploaded_acomptes is not None:
+    file_bytes_ac = uploaded_acomptes.read()
+    sheets_ac = list_sheets(file_bytes_ac)
+    sheet_ac = st.selectbox("Onglet ACOMPTES à utiliser", sheets_ac, index=0, key="sheet_acomptes")
+
+    raw_ac = read_sheet_raw(file_bytes_ac, sheet_ac)
+
+    acomptes_verses = extract_acomptes_verses(raw_ac)
+    acomptes_regul = extract_acomptes_regularises(raw_ac)
+
+    fec_acomptes = build_fec_acomptes(
+        verses=acomptes_verses,
+        regul=acomptes_regul,
+        journal_code=jac_code,
+        journal_lib=jac_lib,
+        compte_encaissement=acompte_compte_debit,
+        lib_encaissement=acompte_lib_debit,
+        compte_4191=acompte_compte_4191,
+        lib_4191=acompte_lib_4191,
+        compte_clients=compte_53,     # <- ton "CCLIENTS"
+        lib_clients=lib_53,
+    )
+
+    fec_parts.append(fec_acomptes)
+
+# ============================
 # FEC final (unique)
 # ============================
 fec_all = pd.concat(fec_parts, ignore_index=True)
@@ -1141,7 +1380,7 @@ if not enc.empty:
 # Display / metrics
 # ============================
 st.subheader("Synthèse")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 with c1:
     st.metric("Lignes ventes", int(len(sales_lines)))
 with c2:
@@ -1154,6 +1393,8 @@ with c5:
     st.metric("Lignes encaissements", int(len(enc)))
 with c6:
     st.metric("TP encaissés", int(len(tp_enc)) if tp_enc is not None else 0)
+with c7:
+    st.metric("Acomptes (écritures)", int(len(fec_acomptes)) if fec_acomptes is not None else 0)
 
 if ctrl_invoices is not None and not ctrl_invoices.empty:
     st.subheader("Factures en mode contrôle (à vérifier)")
@@ -1178,6 +1419,16 @@ if uploaded_remises is not None:
 if uploaded_tiers is not None:
     st.subheader("Aperçu - Tiers payant encaissé")
     st.dataframe(tp_enc, use_container_width=True)
+
+if uploaded_acomptes is not None:
+    st.subheader("Aperçu - Acomptes versés")
+    st.dataframe(acomptes_verses.head(300), use_container_width=True)
+
+    st.subheader("Aperçu - Acomptes régularisés")
+    st.dataframe(acomptes_regul.head(300), use_container_width=True)
+
+    st.subheader("Aperçu FEC - Acomptes (4191)")
+    st.dataframe(fec_acomptes.head(300), use_container_width=True)
 
 st.subheader("Aperçu FEC - Unique")
 st.dataframe(fec_all.head(300), use_container_width=True)
