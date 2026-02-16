@@ -1176,7 +1176,7 @@ tiers-payant;CMUTUELLE;Tiers payant à recevoir
     lib_584 = st.text_input("Libellé 584", value="Tiers payant encaissé")
 
     st.subheader("ACOMPTES (4191) si fichier ACOMPTES fourni")
-    jac_code = st.text_input("JournalCode acomptes", value="AC")
+    jac_code = st.text_input("JournalCode acomptes", value="CS")
     jac_lib = st.text_input("JournalLib acomptes", value="Acomptes")
 
     # ✅ demandé : défaut 583 CB
