@@ -246,7 +246,7 @@ def find_facture_rows(raw: pd.DataFrame) -> list[tuple[int, str, str]]:
     res = []
     for i in range(len(raw)):
         row = raw.iloc[i].astype(str).tolist()
-        joined = " | ".join([x for x in row if x and x.lower() != "nan"])
+        joined = " | ".join(str(x) for x in row if pd.notna(x) and str(x).strip())
         m = FACTURE_RE.search(joined)
         if m:
             res.append((i, m.group(1), m.group(2)))
@@ -363,7 +363,7 @@ def extract_remises_cheques(raw: pd.DataFrame) -> pd.DataFrame:
     starts = []
     for i in range(len(raw)):
         row = raw.iloc[i].astype(str).tolist()
-        joined = " | ".join([x for x in row if x and x.lower() != "nan"])
+        joined = " | ".join(str(x) for x in row if pd.notna(x) and str(x).strip())
         m = BORDEREAU_RE.search(joined)
         if m:
             starts.append((i, m.group(1), m.group(2)))
